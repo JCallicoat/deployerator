@@ -13,24 +13,25 @@ from hammertime.cache import HammerTimeCache
 class CoreHelper(object):
 
   config = HammerTimeConfig(
-   {
-   'nocolor': True,
-   'skiproot': False,
-   'show_passwords': False,
-   'expect_timeout': 60,
-   'ssh_args': '',
-   'terminal': None,
-   'quiet': False,
-   }
-  )
+  {
+    'nocolor': True,
+    'skiproot': False,
+    'show_passwords': False,
+    'expect_timeout': 60,
+    'ssh_args': '',
+    'terminal': None,
+    'quiet': False,
+  })
 
   cache = HammerTimeCache(config)
-  core = HammerTimeCore(cache)
+  core = HammerTimeCore(config, cache)
   ipc = HammerTimeIPCommander()
 
-  login = HammerTimeLogin(core=core, ipc=ipc, config=config, rack=False,
-                          sudo_make_me_a_sandwich=True, root_access='su',
-                          port=22, no_sqlite=False)
+  login = HammerTimeLogin({
+    'core': core, 'ipc': ipc, 'config': config, 'rack': False,
+    'sudo_make_me_a_sandwich': True, 'root_access': 'su',
+    'port': 22, 'no_sqlite': False
+  })
 
   os_re = r'(compute|controller|cpu|infra|cinder|swift)'
 
@@ -45,6 +46,24 @@ class CoreHelper(object):
         return None
 
   def get_stack_servers(self, accounts=[], ids_only=False):
+    computers = []
+    for device in self.get_servers(accounts, ids_only):
+      if device.get('has_openstack_role', None):
+        if re.search(self.os_re, device['server_name']):
+          if ids_only:
+            computers.append(str(device['server']))
+          else:
+            secrets = self.try_method(self.core.getSecrets,
+                                      device['server'])
+            device['admin_user'] = secrets['admin']['user_id']
+            device['admin_pass'] = secrets['admin']['password']
+            device['primary_ip'] = self.try_method(self.ipc.primaryIp,
+                                                   device['server'])
+            computers.append(device)
+
+    return computers
+
+  def get_servers(self, accounts=[], ids_only=False):
     if not accounts:
       return []
 
@@ -65,23 +84,16 @@ class CoreHelper(object):
     include = ['server', 'server_name', 'has_openstack_role', 'os']
     devices = self.try_method(self.core.getDetailsByAccounts, accounts,
                               self.core.getComputerExcludeItems(include))
-
+    if not devices:
+      devices = []
+    
     computers = []
-    for device in devices:
-      if device.get('has_openstack_role', None):
-        if re.search(self.os_re, device['server_name']):
-          if ids_only:
-            computers.append(str(device['server']))
-          else:
-            secrets = self.try_method(self.core.getSecrets,
-                                      device['server'])
-            device['admin_user'] = secrets['admin']['user_id']
-            device['admin_pass'] = secrets['admin']['password']
-            device['primary_ip'] = self.try_method(self.ipc.primaryIp,
-                                                   device['server'])
-            computers.append(device)
+    if ids_only:
+      for device in devices:
+        computers.append(device['server'])
+    devices = computers
 
-    return computers
+    return devices
 
   def run_command(self, computers, command):
     return self.login.script(','.join(computers), command, False)
